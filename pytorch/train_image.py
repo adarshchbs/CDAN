@@ -19,12 +19,12 @@ import pdb
 import math
 
 
-def image_classification_test(loader, model, test_10crop=True):
+def image_classification_test(loader_, model, test_10crop=True):
     start_test = True
     with torch.no_grad():
         if test_10crop:
-            iter_test = [iter(loader['test'][i]) for i in range(10)]
-            for i in range(len(loader['test'][0])):
+            iter_test = [iter(loader_[i]) for i in range(10)]
+            for i in range(len(loader_[0])):
                 data = [iter_test[j].next() for j in range(10)]
                 inputs = [data[j][0] for j in range(10)]
                 labels = data[0][1]
@@ -44,8 +44,8 @@ def image_classification_test(loader, model, test_10crop=True):
                     all_output = torch.cat((all_output, outputs.float().cpu()), 0)
                     all_label = torch.cat((all_label, labels.float()), 0)
         else:
-            iter_test = iter(loader["test"])
-            for i in range(len(loader['test'])):
+            iter_test = iter(loader_)
+            for i in range(len(loader_)):
                 data = iter_test.next()
                 inputs = data[0]
                 labels = data[1]
@@ -60,7 +60,8 @@ def image_classification_test(loader, model, test_10crop=True):
                     all_output = torch.cat((all_output, outputs.float().cpu()), 0)
                     all_label = torch.cat((all_label, labels.float()), 0)
     _, predict = torch.max(all_output, 1)
-    accuracy = torch.sum(torch.squeeze(predict).float() == all_label).item() / float(all_label.size()[0])
+    accuracy = torch.sum(torch.squeeze(predict).cpu().float() == all_label.cpu()).item() / float(all_label.size()[0])
+    # print("accuracy = {}".format(accuracy))
     return accuracy
 
 
@@ -74,6 +75,7 @@ def train(config):
         prep_dict["test"] = prep.image_test_10crop(**config["prep"]['params'])
     else:
         prep_dict["test"] = prep.image_test(**config["prep"]['params'])
+        prep_dict["source_test"] = prep.image_test(**config["prep"]['params'])
 
     ## prepare data
     dsets = {}
@@ -100,6 +102,11 @@ def train(config):
         dsets["test"] = ImageList(open(data_config["test"]["list_path"]).readlines(), \
                                 transform=prep_dict["test"])
         dset_loaders["test"] = DataLoader(dsets["test"], batch_size=test_bs, \
+                                shuffle=False, num_workers=4)
+
+        dsets["source_test"] = ImageList(open(data_config["source_test"]["list_path"]).readlines(), \
+                                transform=prep_dict["source_test"])
+        dset_loaders["source_test"] = DataLoader(dsets["source_test"], batch_size=test_bs, \
                                 shuffle=False, num_workers=4)
 
     class_num = config["network"]["params"]["class_num"]
@@ -140,22 +147,33 @@ def train(config):
     ## train   
     len_train_source = len(dset_loaders["source"])
     len_train_target = len(dset_loaders["target"])
+    print(len_train_source)
+    print(len_train_target)
     transfer_loss_value = classifier_loss_value = total_loss_value = 0.0
     best_acc = 0.0
     for i in range(config["num_iterations"]):
         if i % config["test_interval"] == config["test_interval"] - 1:
+
             base_network.train(False)
-            temp_acc = image_classification_test(dset_loaders, \
+            temp_acc = image_classification_test(dset_loaders['test'], \
                 base_network, test_10crop=prep_config["test_10crop"])
+
+            source_acc = image_classification_test(dset_loaders['source_test'], \
+                base_network, test_10crop=prep_config["test_10crop"])
+
+
             temp_model = nn.Sequential(base_network)
             if temp_acc > best_acc:
                 best_acc = temp_acc
                 best_model = temp_model
+
             log_str = "iter: {:05d}, precision: {:.5f}".format(i, temp_acc)
             config["out_file"].write(log_str+"\n")
             config["out_file"].flush()
             print(log_str)
+            print("source accuracy = {}".format(source_acc))
         if i % config["snapshot_interval"] == 0:
+
             torch.save(nn.Sequential(base_network), osp.join(config["output_path"], \
                 "iter_{:05d}_model.pth.tar".format(i)))
 
@@ -195,14 +213,14 @@ def train(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Conditional Domain Adversarial Network')
-    parser.add_argument('method', type=str, default='CDAN+E', choices=['CDAN', 'CDAN+E', 'DANN'])
+    parser.add_argument('--method', type=str, default='CDAN+E', choices=['CDAN', 'CDAN+E', 'DANN'])
     parser.add_argument('--gpu_id', type=str, nargs='?', default='0', help="device id to run")
     parser.add_argument('--net', type=str, default='ResNet50', choices=["ResNet18", "ResNet34", "ResNet50", "ResNet101", "ResNet152", "VGG11", "VGG13", "VGG16", "VGG19", "VGG11BN", "VGG13BN", "VGG16BN", "VGG19BN", "AlexNet"])
     parser.add_argument('--dset', type=str, default='office', choices=['office', 'image-clef', 'visda', 'office-home'], help="The dataset or source dataset used")
-    parser.add_argument('--s_dset_path', type=str, default='../../data/office/amazon_31_list.txt', help="The source dataset path list")
-    parser.add_argument('--t_dset_path', type=str, default='../../data/office/webcam_10_list.txt', help="The target dataset path list")
-    parser.add_argument('--test_interval', type=int, default=500, help="interval of two continuous test phase")
-    parser.add_argument('--snapshot_interval', type=int, default=5000, help="interval of two continuous output model")
+    parser.add_argument('--s_dset_path', type=str, default='/home/adarsh/project/CDAN/pytorch/sketchy_train.txt', help="The source dataset path list")
+    parser.add_argument('--t_dset_path', type=str, default='/home/adarsh/project/CDAN/pytorch/quick_draw_train.txt', help="The target dataset path list")
+    parser.add_argument('--test_interval', type=int, default=400, help="interval of two continuous test phase")
+    parser.add_argument('--snapshot_interval', type=int, default=10000, help="interval of two continuous output model")
     parser.add_argument('--output_dir', type=str, default='san', help="output directory of our model (in ../snapshot directory)")
     parser.add_argument('--lr', type=float, default=0.001, help="learning rate")
     parser.add_argument('--random', type=bool, default=False, help="whether use random projection")
@@ -225,7 +243,7 @@ if __name__ == "__main__":
     if not osp.exists(config["output_path"]):
         os.mkdir(config["output_path"])
 
-    config["prep"] = {"test_10crop":True, 'params':{"resize_size":256, "crop_size":224, 'alexnet':False}}
+    config["prep"] = {"test_10crop":False, 'params':{"resize_size":256, "crop_size":224, 'alexnet':False}}
     config["loss"] = {"trade_off":1.0}
     if "AlexNet" in args.net:
         config["prep"]['params']['alexnet'] = True
@@ -234,7 +252,7 @@ if __name__ == "__main__":
             "params":{"use_bottleneck":True, "bottleneck_dim":256, "new_cls":True} }
     elif "ResNet" in args.net:
         config["network"] = {"name":network.ResNetFc, \
-            "params":{"resnet_name":args.net, "use_bottleneck":True, "bottleneck_dim":256, "new_cls":True} }
+            "params":{"resnet_name":args.net, "use_bottleneck":False, "bottleneck_dim":256, "new_cls":True} }
     elif "VGG" in args.net:
         config["network"] = {"name":network.VGGFc, \
             "params":{"vgg_name":args.net, "use_bottleneck":True, "bottleneck_dim":256, "new_cls":True} }
@@ -246,20 +264,22 @@ if __name__ == "__main__":
                            "lr_param":{"lr":args.lr, "gamma":0.001, "power":0.75} }
 
     config["dataset"] = args.dset
-    config["data"] = {"source":{"list_path":args.s_dset_path, "batch_size":36}, \
-                      "target":{"list_path":args.t_dset_path, "batch_size":36}, \
-                      "test":{"list_path":args.t_dset_path, "batch_size":4}}
+    config["data"] = {"source":{"list_path":args.s_dset_path, "batch_size":32}, \
+                      "target":{"list_path":args.t_dset_path, "batch_size":32}, \
+                      "test":{"list_path":'/home/adarsh/project/CDAN/pytorch/quick_draw_val.txt', "batch_size":32},\
+                      "source_test":{"list_path":'/home/adarsh/project/CDAN/pytorch/sketchy_val.txt', "batch_size":32}}
 
     if config["dataset"] == "office":
         if ("amazon" in args.s_dset_path and "webcam" in args.t_dset_path) or \
            ("webcam" in args.s_dset_path and "dslr" in args.t_dset_path) or \
            ("webcam" in args.s_dset_path and "amazon" in args.t_dset_path) or \
            ("dslr" in args.s_dset_path and "amazon" in args.t_dset_path):
-            config["optimizer"]["lr_param"]["lr"] = 0.001 # optimal parameters
+            config["optimizer"]["lr_param"]["lr"] = 0.0001 # optimal parameters
         elif ("amazon" in args.s_dset_path and "dslr" in args.t_dset_path) or \
              ("dslr" in args.s_dset_path and "webcam" in args.t_dset_path):
-            config["optimizer"]["lr_param"]["lr"] = 0.0003 # optimal parameters       
-        config["network"]["params"]["class_num"] = 31 
+            config["optimizer"]["lr_param"]["lr"] = 0.0001 # optimal parameters
+        config["optimizer"]["lr_param"]["lr"] = 0.0003       
+        config["network"]["params"]["class_num"] = 87 
     elif config["dataset"] == "image-clef":
         config["optimizer"]["lr_param"]["lr"] = 0.001 # optimal parameters
         config["network"]["params"]["class_num"] = 12
