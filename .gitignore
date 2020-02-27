@@ -103,3 +103,8 @@ tensorflow/snapshot/*
 *.png
 *.tar.gz
 *.pth.tar
+pytorch/classifier_weights
+pytorch/correct_classified.txt
+pytorch/feature_array.txt
+pytorch/label_array.txt
+pytorch/loss_array.txt
